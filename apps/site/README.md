@@ -15,6 +15,8 @@ The site remains the public companion to the canonical CLI-first path:
 
 ## Local Commands
 
+Use Node 20 locally so your dev, typecheck, and build behavior matches CI and Netlify. The frontend apps now declare `node: 20.x`, and local installs enforce that version via app-local `.npmrc` files.
+
 From the repository root:
 
 ```bash
