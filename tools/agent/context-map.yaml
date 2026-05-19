@@ -109,6 +109,7 @@
       "*_CODE_ANALYSIS.md",
       "docs/README.md",
       "docs/system-design/**",
+      "docs/design/**",
       "docs/paper/**"
     ],
     "agent_text": [
@@ -159,7 +160,8 @@
       "packages/growth/**",
       "packages/understanding/**",
       "packages/experience/**",
-      "packages/continuity/**"
+      "packages/continuity/**",
+      "packages/reflect/**"
     ],
     "infra": [
       "packages/auth/**",

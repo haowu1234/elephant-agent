@@ -278,6 +278,33 @@ def skill_affinity_index_id(topic: object) -> str:
     return ""
 
 
+def is_skill_optimization_topic(topic: object) -> bool:
+    resolved = valid_topic_key(topic)
+    return resolved.startswith("world.skills.optimization.") or resolved.startswith("skills.optimization.")
+
+
+def skill_optimization_scope(topic: object) -> str:
+    resolved = valid_topic_key(topic)
+    parts = resolved.split(".")
+    if len(parts) < 4:
+        return ""
+    if parts[0] not in {"world", "skills"} or parts[1] != "skills" or parts[2] != "optimization":
+        return ""
+    return parts[3]
+
+
+def skill_optimization_candidate_key(topic: object) -> str:
+    resolved = valid_topic_key(topic)
+    parts = resolved.split(".")
+    if len(parts) < 5:
+        return ""
+    if parts[0] not in {"world", "skills"}:
+        return ""
+    if parts[1] != "skills" or parts[2] != "optimization":
+        return ""
+    return parts[-1]
+
+
 def numeric_mentions(value: object) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
