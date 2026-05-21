@@ -10,12 +10,7 @@ from packages.contracts import ElephantIdentityRecord, Episode
 from packages.state.rendered_views import RenderedRelationshipView, RenderedUserProfileView
 from packages.contracts.runtime import PersonalModelRuntimeState
 from packages.evidence.recall_runtime import RecallRuntime
-from packages.state import (
-    CompanionSettings,
-    is_companion_mode,
-    resolve_personality_preset,
-    user_profile_updates,
-)
+from packages.state import CompanionSettings, is_companion_mode, resolve_personality_preset, user_profile_updates
 from packages.state.canonical import build_canonical_profile_state
 from packages.state.persistence import (
     load_persisted_canonical_state,
