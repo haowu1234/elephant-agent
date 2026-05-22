@@ -198,6 +198,7 @@ def open_next_episode(
         current=now,
         episode_id=next_episode_id,
         semantic_summary_indexer=getattr(runtime, "_semantic_summary_indexer", None),
+        session_resource_manager=runtime.tool_runtime,
     )
     runtime._ensure_learning_worker_if_needed()
     session = transition.episode
@@ -856,4 +857,5 @@ def build_kernel_dependencies(
         security_policy=runtime.security_policy,
         skill_runtime=runtime.skill_runtime,
         semantic_summary_indexer=semantic_summary_indexer,
+        session_resource_manager=runtime.tool_runtime,
     )

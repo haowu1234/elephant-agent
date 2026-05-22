@@ -9,7 +9,11 @@ from typing import Mapping
 from packages.contracts.layers import Episode, Loop, PersonalModel, State, Step
 from packages.contracts.runtime import ContextBundle, ExecutionResult, PromptMessage
 
-from .runtime_support import KernelSourceRequest, KernelStoragePort
+from .runtime_support import (
+    KernelSessionResourceManager,
+    KernelSourceRequest,
+    KernelStoragePort,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +237,7 @@ def open_episode_lifecycle(
     identity: KernelRuntimeIdentity,
     *,
     current: datetime,
+    session_resource_manager: KernelSessionResourceManager | None = None,
 ) -> KernelEpisodeLifecycle:
     policy = _episode_policy(request)
     if request.episode_id is not None:
@@ -279,6 +284,7 @@ def open_episode_lifecycle(
                 reason="idle_timeout",
                 summary="closed after gateway idle timeout",
                 current=current,
+                session_resource_manager=session_resource_manager,
             )
             idle_closed.append(closed)
 
@@ -346,6 +352,7 @@ def close_episode_lifecycle(
     summary: str,
     current: datetime,
     semantic_summary_indexer: object | None = None,
+    session_resource_manager: KernelSessionResourceManager | None = None,
 ) -> Episode:
     if not lifecycle.close_on_completion:
         refreshed = replace(
@@ -355,22 +362,15 @@ def close_episode_lifecycle(
         )
         storage.upsert_episode(refreshed)
         return refreshed
-    closed = replace(
-        lifecycle.episode,
-        status="closed",
-        ended_at=current,
-        updated_at=current,
-        exit_summary=summary,
-        metadata={**dict(lifecycle.episode.metadata), "closed_reason": "final_response"},
+
+    from .episode_state_machine import close_episode
+
+    return close_episode(
+        storage,
+        lifecycle.episode.episode_id,
+        reason="final_response",
+        summary=summary,
+        current=current,
+        semantic_summary_indexer=semantic_summary_indexer,
+        session_resource_manager=session_resource_manager,
     )
-    storage.upsert_episode(closed)
-    # Push the exit summary into the semantic index so future episodes can
-    # recall it. Best-effort: indexer returns None on any failure.
-    if semantic_summary_indexer is not None:
-        index_exit = getattr(semantic_summary_indexer, "index_episode_exit", None)
-        if callable(index_exit):
-            try:
-                index_exit(closed)
-            except Exception:
-                pass
-    return closed

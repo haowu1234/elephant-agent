@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from packages.contracts.layers import Episode
 
-from .runtime_support import KernelStoragePort
+from .runtime_support import KernelSessionResourceManager, KernelStoragePort
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +17,18 @@ class EpisodeTransition:
     parent_episode: Episode
     episode: Episode
     lineage: tuple[Episode, ...]
+
+
+def _cleanup_episode_resources(
+    session_resource_manager: KernelSessionResourceManager | None,
+    episode_id: str,
+) -> None:
+    if session_resource_manager is None:
+        return
+    try:
+        session_resource_manager.cleanup_session(episode_id)
+    except Exception:
+        pass
 
 
 def close_episode(
@@ -27,6 +39,7 @@ def close_episode(
     summary: str,
     current: datetime | None = None,
     semantic_summary_indexer: object | None = None,
+    session_resource_manager: KernelSessionResourceManager | None = None,
 ) -> Episode:
     """Close an episode with guaranteed side-effects (indexing + learning enqueue).
 
@@ -42,6 +55,8 @@ def close_episode(
         summary: Exit summary text for future recall.
         current: Timestamp (defaults to now).
         semantic_summary_indexer: Optional semantic indexer for exit summary recall.
+        session_resource_manager: Optional best-effort cleaner for session-scoped
+            runtime resources such as sandbox sessions.
 
     Returns:
         The closed Episode.
@@ -53,6 +68,7 @@ def close_episode(
     if episode is None:
         raise KeyError(f"episode not found: {episode_id}")
     if episode.status == "closed":
+        _cleanup_episode_resources(session_resource_manager, episode_id)
         return episode  # idempotent
 
     closed = replace(
@@ -93,6 +109,7 @@ def close_episode(
         except Exception:
             pass
 
+    _cleanup_episode_resources(session_resource_manager, closed.episode_id)
     return closed
 
 
@@ -147,6 +164,7 @@ def open_next_episode(
     episode_id: str | None = None,
     entry_surface: str | None = None,
     semantic_summary_indexer: object | None = None,
+    session_resource_manager: KernelSessionResourceManager | None = None,
 ) -> EpisodeTransition:
     """Close the previous Episode if needed and open the next Episode/Session.
 
@@ -170,6 +188,7 @@ def open_next_episode(
             summary=close_summary,
             current=current,
             semantic_summary_indexer=semantic_summary_indexer,
+            session_resource_manager=session_resource_manager,
         )
 
     state = storage.load_state(parent.state_id)

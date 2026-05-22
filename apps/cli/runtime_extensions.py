@@ -93,6 +93,7 @@ def build_tool_runtime(
     dependencies: BuiltinToolDependencies,
     snapshot_path: Path,
     security_policy: SecurityPolicy,
+    state_dir: str | Path | None = None,
 ) -> ToolRuntime:
     return build_secured_tool_runtime(
         enabled_overrides=manifest.tool_overrides,
@@ -108,6 +109,7 @@ def build_tool_runtime(
             requester=requester,
             dependencies=dependencies,
         ),
+        state_dir=state_dir,
     )
 
 
