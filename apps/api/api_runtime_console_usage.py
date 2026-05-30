@@ -7,6 +7,8 @@ import json
 import sqlite3
 from typing import Any
 
+from packages.telemetry import parse_token_efficiency_payload
+
 
 def _json_loads(value: object, fallback: Any) -> Any:
     if value is None:
@@ -36,6 +38,20 @@ def _int_value(value: object) -> int:
         return 0
 
 
+def _float_value(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
 def _cache_hit_rate_label(cached_tokens: int, prompt_tokens: int) -> str:
     if prompt_tokens <= 0:
         return "n/a"
@@ -54,20 +70,24 @@ def normalize_token_usage_row(row: Mapping[str, Any]) -> dict[str, Any]:
     record = dict(row)
     metadata_payload = _json_loads(record.pop("metadata_json", None), {})
     metadata = dict(metadata_payload) if isinstance(metadata_payload, Mapping) else {}
+    ledger = parse_token_efficiency_payload(metadata.get("token_efficiency_json"))
     prompt_tokens = _int_value(record.get("prompt_tokens"))
     cached_tokens = _int_value(
-        metadata.get("cached_prompt_tokens")
+        ledger.get("cachedInputTokens")
+        or metadata.get("cached_prompt_tokens")
         or metadata.get("cachedPromptTokens")
         or metadata.get("cache_read_input_tokens")
     )
     creation_tokens = _int_value(
-        metadata.get("cache_creation_prompt_tokens")
+        ledger.get("cacheWriteInvestmentTokens")
+        or metadata.get("cache_creation_prompt_tokens")
         or metadata.get("cacheCreationPromptTokens")
         or metadata.get("cache_creation_input_tokens")
     )
     cache_usage_reported = bool(
-        metadata.get("cache_usage_reported")
-        or metadata.get("cacheUsageReported")
+        ledger.get("cacheUsageReported")
+        or _bool_value(metadata.get("cache_usage_reported"))
+        or _bool_value(metadata.get("cacheUsageReported"))
         or "cached_prompt_tokens" in metadata
         or "cachedPromptTokens" in metadata
         or "cache_read_input_tokens" in metadata
@@ -76,6 +96,31 @@ def normalize_token_usage_row(row: Mapping[str, Any]) -> dict[str, Any]:
         or "cache_creation_input_tokens" in metadata
     )
     record["metadata"] = metadata
+    if ledger:
+        record["token_efficiency"] = ledger
+        record["tokenEfficiency"] = ledger
+        record["context_pressure_tokens"] = _int_value(
+            ledger.get("contextPressureTokens") or metadata.get("context_pressure_tokens")
+        )
+        record["cost_pressure_tokens"] = _int_value(
+            ledger.get("costPressureTokens") or metadata.get("cost_pressure_tokens")
+        )
+        record["non_cached_input_tokens"] = _int_value(
+            ledger.get("nonCachedInputTokens") or metadata.get("non_cached_input_tokens")
+        )
+        record["cache_write_investment_tokens"] = _int_value(
+            ledger.get("cacheWriteInvestmentTokens") or metadata.get("cache_write_investment_tokens")
+        )
+        record["contextPressureTokens"] = record["context_pressure_tokens"]
+        record["costPressureTokens"] = record["cost_pressure_tokens"]
+        record["nonCachedInputTokens"] = record["non_cached_input_tokens"]
+        record["cacheWriteInvestmentTokens"] = record["cache_write_investment_tokens"]
+        if ledger.get("contextPressureRatio") is not None:
+            record["context_pressure_ratio"] = ledger.get("contextPressureRatio")
+            record["contextPressureRatio"] = ledger.get("contextPressureRatio")
+        if ledger.get("pressureSource"):
+            record["pressure_source"] = ledger.get("pressureSource")
+            record["pressureSource"] = ledger.get("pressureSource")
     record["cached_prompt_tokens"] = cached_tokens
     record["cache_creation_prompt_tokens"] = creation_tokens
     record["cache_usage_reported"] = cache_usage_reported
@@ -101,6 +146,115 @@ def normalize_token_usage_row(row: Mapping[str, Any]) -> dict[str, Any]:
         record["cache_hit_rate"] = cache_hit_rate
         record["cacheHitRate"] = cache_hit_rate
     return record
+
+
+def token_efficiency_projection(events: list[dict[str, Any]]) -> dict[str, Any]:
+    ledger_events = [event for event in events if isinstance(event.get("token_efficiency"), Mapping)]
+    if not ledger_events:
+        return {
+            "summary": {
+                "turns": 0,
+                "episodes": 0,
+                "contextPressureTokens": 0,
+                "costPressureTokens": 0,
+                "nonCachedInputTokens": 0,
+                "cacheWriteInvestmentTokens": 0,
+                "cacheHitRateLabel": "n/a",
+            },
+            "episodeTrajectories": (),
+            "pressureSources": (),
+            "compactionMarkers": (),
+        }
+    total_prompt = sum(_int_value(event.get("prompt_tokens")) for event in ledger_events)
+    total_cached = sum(_int_value(event.get("cached_prompt_tokens")) for event in ledger_events)
+    pressure_sources: dict[str, int] = {}
+    compaction_markers: list[dict[str, Any]] = []
+    by_episode: dict[str, list[dict[str, Any]]] = {}
+    for event in ledger_events:
+        ledger = event.get("token_efficiency")
+        if not isinstance(ledger, Mapping):
+            continue
+        episode_id = str(ledger.get("episodeId") or event.get("session_id") or "unknown")
+        by_episode.setdefault(episode_id, []).append(event)
+        source = str(ledger.get("pressureSource") or event.get("pressure_source") or "unclassified")
+        pressure_sources[source] = pressure_sources.get(source, 0) + _int_value(
+            ledger.get("contextPressureTokens") or event.get("context_pressure_tokens")
+        )
+        compaction = ledger.get("compactionEvent")
+        if isinstance(compaction, Mapping) and compaction:
+            compaction_markers.append(
+                {
+                    "episodeId": episode_id,
+                    "turnIndex": _int_value(ledger.get("turnIndex")),
+                    "createdAt": ledger.get("createdAt") or event.get("created_at") or "",
+                    "detail": compaction.get("detail") or "",
+                    "reason": compaction.get("reason") or "",
+                    "tokens": compaction.get("tokens") or "",
+                }
+            )
+    trajectories = []
+    for episode_id, rows in by_episode.items():
+        sorted_rows = sorted(rows, key=lambda item: str(item.get("created_at") or ""))
+        trajectory_rows = []
+        for index, event in enumerate(sorted_rows, start=1):
+            ledger = event.get("token_efficiency")
+            if not isinstance(ledger, Mapping):
+                continue
+            buckets = ledger.get("buckets") if isinstance(ledger.get("buckets"), Mapping) else {}
+            cache_hit = ledger.get("cacheHitRate")
+            trajectory_rows.append(
+                {
+                    "turnIndex": _int_value(ledger.get("turnIndex")) or index,
+                    "createdAt": ledger.get("createdAt") or event.get("created_at") or "",
+                    "modelId": ledger.get("modelId") or event.get("model_id") or "",
+                    "contextPressureTokens": _int_value(ledger.get("contextPressureTokens")),
+                    "contextPressureRatio": _float_value(ledger.get("contextPressureRatio")),
+                    "costPressureTokens": _int_value(ledger.get("costPressureTokens")),
+                    "nonCachedInputTokens": _int_value(ledger.get("nonCachedInputTokens")),
+                    "cacheWriteInvestmentTokens": _int_value(ledger.get("cacheWriteInvestmentTokens")),
+                    "cacheHitRate": cache_hit if isinstance(cache_hit, (int, float)) else None,
+                    "cacheHitRateLabel": (
+                        f"{float(cache_hit) * 100:.1f}%"
+                        if isinstance(cache_hit, (int, float))
+                        else "n/a"
+                    ),
+                    "pressureSource": ledger.get("pressureSource") or "",
+                    "buckets": dict(buckets),
+                    "compactionEvent": dict(ledger.get("compactionEvent")) if isinstance(ledger.get("compactionEvent"), Mapping) else {},
+                }
+            )
+        last_turn_at = trajectory_rows[-1]["createdAt"] if trajectory_rows else ""
+        trajectories.append(
+            {
+                "episodeId": episode_id,
+                "label": episode_id,
+                "turns": len(trajectory_rows),
+                "lastTurnAt": last_turn_at,
+                "contextPressureTokens": sum(_int_value(row.get("contextPressureTokens")) for row in trajectory_rows),
+                "costPressureTokens": sum(_int_value(row.get("costPressureTokens")) for row in trajectory_rows),
+                "rows": tuple(trajectory_rows),
+            }
+        )
+    return {
+        "summary": {
+            "turns": len(ledger_events),
+            "episodes": len(by_episode),
+            "contextPressureTokens": sum(_int_value(event.get("context_pressure_tokens")) for event in ledger_events),
+            "costPressureTokens": sum(_int_value(event.get("cost_pressure_tokens")) for event in ledger_events),
+            "nonCachedInputTokens": sum(_int_value(event.get("non_cached_input_tokens")) for event in ledger_events),
+            "cacheWriteInvestmentTokens": sum(_int_value(event.get("cache_write_investment_tokens")) for event in ledger_events),
+            "cacheHitRateLabel": _cache_hit_rate_label(total_cached, total_prompt) if total_prompt else "n/a",
+            "cacheHitRate": round(total_cached / total_prompt, 4) if total_prompt else None,
+        },
+        "episodeTrajectories": tuple(
+            sorted(trajectories, key=lambda item: str(item.get("lastTurnAt") or ""), reverse=True)[:50]
+        ),
+        "pressureSources": tuple(
+            {"source": source, "contextPressureTokens": tokens}
+            for source, tokens in sorted(pressure_sources.items(), key=lambda item: item[1], reverse=True)
+        ),
+        "compactionMarkers": tuple(compaction_markers),
+    }
 
 
 def token_usage_rows_for_session(connection: sqlite3.Connection, session_id: object) -> list[dict[str, Any]]:

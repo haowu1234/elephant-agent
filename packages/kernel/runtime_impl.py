@@ -4,6 +4,8 @@ import concurrent.futures
 import sys
 from uuid import uuid4
 
+from packages.telemetry import build_token_efficiency_record, token_efficiency_metadata
+
 from .context_compaction import (
     append_episode_continuity_packet,
     compact_context_after_usage,
@@ -46,6 +48,15 @@ def _compact_state_projection_text(value: object, *, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 3)].rstrip(" ,;|") + "..."
+
+
+def _execution_side_effect_value(execution: object, key: str) -> str:
+    prefix = f"{key}="
+    for item in getattr(execution, "side_effects", ()) or ():
+        text = str(item or "")
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return ""
 
 
 def _primary_learning_trigger(
@@ -423,6 +434,23 @@ class KernelService:
 
         delivery = self._deliver(request, profile, session, execution)
         stage("emit", "telemetry and delivery hooks dispatched")
+        emit_step_id = f"step:{loop_lifecycle.loop.loop_id}:{len(step_recorder.steps)}"
+        ledger = build_token_efficiency_record(
+            context=context,
+            execution=execution,
+            episode_id=episode_lifecycle.episode.episode_id,
+            loop_id=loop_lifecycle.loop.loop_id,
+            step_id=emit_step_id,
+            turn_index=len(step_recorder.steps),
+            created_at=_clock_now(),
+            user_prompt=prompt_for_execution,
+            turn_messages=turn_messages,
+            stages=tuple(stages),
+            provider_id=_execution_side_effect_value(execution, "provider"),
+            model_id=_execution_side_effect_value(execution, "model"),
+            transport_id=_execution_side_effect_value(execution, "transport"),
+            context_window_tokens=int(getattr(context, "token_budget", 0) or 0),
+        )
         step_recorder.record(
             phase="acting",
             action="emit_response",
@@ -437,6 +465,10 @@ class KernelService:
                 "prompt_tokens": str(execution.prompt_tokens),
                 "completion_tokens": str(execution.completion_tokens),
                 "total_tokens": str(execution.total_tokens),
+                "cached_prompt_tokens": str(execution.cached_prompt_tokens),
+                "cache_creation_prompt_tokens": str(execution.cache_creation_prompt_tokens),
+                "cache_usage_reported": str(execution.cache_usage_reported),
+                **token_efficiency_metadata(ledger),
             },
         )
         loop = close_loop_lifecycle(

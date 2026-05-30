@@ -15,6 +15,12 @@ Current active planning set:
 - [macOS Full Regression Acceptance](macos-full-regression-acceptance.md)
   - active acceptance plan for real packaged macOS app, model-backed UX,
     Personal Model memory, and native desktop workflow coverage
+- [Context Engineering Optimization Plan](context-engineering-research.md)
+  - follow-up tracks from the context-engineering research pass, with explicit
+    write scopes for scorecard, long-horizon evals, recall diagnostics,
+    compaction quality, prompt-cache stability, and tool-output pressure
+  - synchronized Chinese companion:
+    [context-engineering-research.zh-CN.md](context-engineering-research.zh-CN.md)
 
 Rules:
 

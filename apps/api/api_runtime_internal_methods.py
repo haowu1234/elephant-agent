@@ -20,7 +20,7 @@ from .api_runtime_console import (
     _skills,
     _tools,
 )
-from .api_runtime_console_usage import normalize_token_usage_row
+from .api_runtime_console_usage import normalize_token_usage_row, token_efficiency_projection
 from .api_runtime_support import _jsonable, _now
 
 
@@ -229,8 +229,16 @@ def _step_usage_events(
         """,
     )
     events: list[dict[str, Any]] = []
+    row_metadata: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    seen_ledger_execution_ids = set(ledger_execution_ids)
     for row in rows:
         metadata = _usage_metadata(row.get("metadata_json"))
+        row_metadata.append((row, metadata))
+        if metadata.get("token_efficiency_schema"):
+            execution_id = str(metadata.get("execution_id") or "").strip()
+            if execution_id:
+                seen_ledger_execution_ids.add(execution_id)
+    for row, metadata in row_metadata:
         prompt_tokens = _usage_int(metadata.get("prompt_tokens"))
         completion_tokens = _usage_int(metadata.get("completion_tokens"))
         total_tokens = _usage_int(metadata.get("total_tokens")) or prompt_tokens + completion_tokens
@@ -238,7 +246,7 @@ def _step_usage_events(
             continue
         step_id = str(row.get("step_id") or "")
         execution_id = str(metadata.get("execution_id") or "").strip()
-        if execution_id and execution_id in ledger_execution_ids:
+        if execution_id and execution_id in seen_ledger_execution_ids and not metadata.get("token_efficiency_schema"):
             continue
         if step_id and step_id in ledger_source_event_ids:
             continue
@@ -292,6 +300,7 @@ def _canonical_usage(database_path: Any) -> dict[str, Any]:
         "tokenEvents": tuple(combined_events),
         "tokenTrend": _usage_trend(combined_events),
         "eggUsage": _usage_by_elephant(combined_events),
+        "tokenEfficiency": token_efficiency_projection(combined_events),
     }
 
 

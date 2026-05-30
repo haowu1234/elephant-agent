@@ -36,6 +36,15 @@ from .runtime import (
     emit_failure_event,
     emit_lifecycle_event,
 )
+from .token_efficiency import (
+    TOKEN_EFFICIENCY_SCHEMA_VERSION,
+    TokenEfficiencyBuckets,
+    TokenEfficiencyLedgerRecord,
+    build_token_efficiency_record,
+    parse_token_efficiency_payload,
+    token_efficiency_metadata,
+    token_efficiency_payload,
+)
 
 __all__ = [
     "APPROVAL_DECISIONS",
@@ -73,4 +82,11 @@ __all__ = [
     "TelemetryFamily",
     "TelemetryPhase",
     "TelemetrySink",
+    "TOKEN_EFFICIENCY_SCHEMA_VERSION",
+    "TokenEfficiencyBuckets",
+    "TokenEfficiencyLedgerRecord",
+    "build_token_efficiency_record",
+    "parse_token_efficiency_payload",
+    "token_efficiency_metadata",
+    "token_efficiency_payload",
 ]

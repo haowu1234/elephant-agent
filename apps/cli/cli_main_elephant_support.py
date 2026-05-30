@@ -173,11 +173,11 @@ def _print_doctor(runtime: CliRuntime, *, deep: bool = False) -> None:
         f"active_provider_embedding_ready · {_embedding_bootstrap_ready_label(active.get('embedding_bootstrap_status'))}",
     )
     provider_checks = tuple(
-        f"{check['check']} · {check['status']}{f' · {check['summary']}' if check.get('summary') else ''}"
+        f"{check['check']} · {check['status']}{' · ' + str(check['summary']) if check.get('summary') else ''}"
         for check in provider["checks"]
     )
     security_checks = tuple(
-        f"{check['check']} · {check['status']}{f' · {check['summary']}' if check.get('summary') else ''}"
+        f"{check['check']} · {check['status']}{' · ' + str(check['summary']) if check.get('summary') else ''}"
         for check in security["checks"]
     )
     extra_lines = (
@@ -478,7 +478,7 @@ def _print_elephant_blocked(runtime: CliRuntime) -> None:
     report = runtime.provider_doctor()
     provider = report["provider"]
     checks = tuple(
-        f"{check['check']} · {check['status']}{f' · {check['summary']}' if check.get('summary') else ''}"
+        f"{check['check']} · {check['status']}{' · ' + str(check['summary']) if check.get('summary') else ''}"
         for check in report["checks"]
     )
     sections = [
@@ -504,7 +504,7 @@ def _print_grow_blocked(runtime: CliRuntime) -> None:
     report = runtime.provider_doctor()
     provider = report["provider"]
     checks = tuple(
-        f"{check['check']} · {check['status']}{f' · {check['summary']}' if check.get('summary') else ''}"
+        f"{check['check']} · {check['status']}{' · ' + str(check['summary']) if check.get('summary') else ''}"
         for check in report["checks"]
     )
     sections = [

@@ -6129,6 +6129,171 @@ function UsageChart({ rows }: { rows: DashboardRow[] }): React.JSX.Element {
   );
 }
 
+const tokenBucketConfig = [
+  { key: "stablePrefixTokens", label: "Prefix", color: "var(--dashboard-token-prefix)" },
+  { key: "sessionSnapshotTokens", label: "Resume", color: "var(--dashboard-token-resume)" },
+  { key: "loopContextTokens", label: "Recall", color: "var(--dashboard-token-recall)" },
+  { key: "messageHistoryTokens", label: "History", color: "var(--dashboard-token-history)" },
+  { key: "toolSchemaTokens", label: "Schemas", color: "var(--dashboard-token-schema)" },
+  { key: "toolResultTokens", label: "Tools", color: "var(--dashboard-token-tool)" },
+  { key: "currentUserInputTokens", label: "Input", color: "var(--dashboard-token-input)" },
+  { key: "unbucketedInputTokens", label: "Other", color: "var(--dashboard-token-other)" },
+] as const;
+
+function cacheHealthLabel(hitRate: number | null): string {
+  if (hitRate === null) {
+    return "n/a";
+  }
+  if (hitRate >= 0.7) {
+    return "good";
+  }
+  if (hitRate >= 0.4) {
+    return "ok";
+  }
+  return "low";
+}
+
+function cacheHealthClass(hitRate: number | null): string {
+  if (hitRate === null) {
+    return styles.cacheHealthUnknown;
+  }
+  if (hitRate >= 0.7) {
+    return styles.cacheHealthGood;
+  }
+  if (hitRate >= 0.4) {
+    return styles.cacheHealthOk;
+  }
+  return styles.cacheHealthLow;
+}
+
+function tokenBucketSegments(row: DashboardRow): Array<{ key: string; label: string; tokens: number; color: string }> {
+  const buckets = jsonObject(row.buckets);
+  return tokenBucketConfig
+    .map((bucket) => ({
+      key: bucket.key,
+      label: bucket.label,
+      tokens: Number(buckets[bucket.key] ?? 0),
+      color: bucket.color,
+    }))
+    .filter((bucket) => bucket.tokens > 0);
+}
+
+function tokenBucketLegend(): React.JSX.Element {
+  return (
+    <div className={styles.contextTimelineLegend} aria-label="Token bucket legend">
+      {tokenBucketConfig.map((bucket) => (
+        <span key={bucket.key}>
+          <i style={{ background: bucket.color }} />
+          {bucket.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ContextTimeline({ trajectories }: { trajectories: DashboardRow[] }): React.JSX.Element {
+  const [selectedEpisodeId, setSelectedEpisodeId] = React.useState("");
+  const [selectedTurn, setSelectedTurn] = React.useState(0);
+  const selectedTrajectory =
+    trajectories.find((row) => valueOf(row, "episodeId") === selectedEpisodeId) ?? trajectories[0];
+  const rows = asRows(selectedTrajectory?.rows);
+  const activeTurn = rows.find((row) => numberOf(row, "turnIndex") === selectedTurn) ?? rows[rows.length - 1] ?? {};
+  const activeBuckets = tokenBucketSegments(activeTurn);
+  const activeContext = numberOf(activeTurn, "contextPressureTokens");
+  const activeCost = numberOf(activeTurn, "costPressureTokens");
+  const activeHit = typeof activeTurn.cacheHitRate === "number" ? activeTurn.cacheHitRate : null;
+  const activeHitLabel = valueOf(activeTurn, "cacheHitRateLabel", activeHit === null ? "n/a" : `${(activeHit * 100).toFixed(1)}%`);
+  const activeCompaction = jsonObject(activeTurn.compactionEvent);
+
+  if (!trajectories.length || !rows.length) {
+    return <EmptyPanel title="No context timeline yet" detail="The context timeline appears after turns start recording token efficiency ledger rows." />;
+  }
+
+  return (
+    <div className={styles.contextTimelineShell}>
+      <div className={styles.contextTimelineControls}>
+        <label>
+          <span>Episode</span>
+          <select value={valueOf(selectedTrajectory, "episodeId")} onChange={(event) => {
+            setSelectedEpisodeId(event.target.value);
+            setSelectedTurn(0);
+          }}>
+            {trajectories.map((trajectory) => (
+              <option key={valueOf(trajectory, "episodeId")} value={valueOf(trajectory, "episodeId")}>
+                {valueOf(trajectory, "label", valueOf(trajectory, "episodeId"))}
+              </option>
+            ))}
+          </select>
+        </label>
+        {tokenBucketLegend()}
+      </div>
+      <div className={styles.contextTimelineGrid}>
+        <div className={styles.contextTurnStrip} aria-label="Context token usage by turn">
+          {rows.map((row) => {
+            const turnIndex = numberOf(row, "turnIndex");
+            const contextRatio = Math.min(1, Math.max(0.08, Number(row.contextPressureRatio ?? 0)));
+            const segments = tokenBucketSegments(row);
+            const segmentTotal = Math.max(1, segments.reduce((sum, segment) => sum + segment.tokens, 0));
+            const hitRate = typeof row.cacheHitRate === "number" ? row.cacheHitRate : null;
+            const compaction = jsonObject(row.compactionEvent);
+            const selected = numberOf(activeTurn, "turnIndex") === turnIndex;
+            return (
+              <button
+                key={`${valueOf(row, "createdAt")}-${turnIndex}`}
+                className={cx(styles.contextTurn, selected && styles.contextTurnSelected)}
+                type="button"
+                onClick={() => setSelectedTurn(turnIndex)}
+              >
+                <span className={styles.contextTurnMarker}>{Object.keys(compaction).length ? "C" : ""}</span>
+                <span className={styles.contextBlock}>
+                  <span className={styles.contextBlockFill} style={{ height: `${contextRatio * 100}%` }}>
+                    {segments.map((segment) => (
+                      <span
+                        key={segment.key}
+                        title={`${segment.label}: ${formatCompactNumber(segment.tokens)}`}
+                        style={{ flexGrow: segment.tokens / segmentTotal, background: segment.color }}
+                      />
+                    ))}
+                  </span>
+                </span>
+                <strong>T{turnIndex}</strong>
+                <span className={cx(styles.cacheHealthDot, cacheHealthClass(hitRate))} />
+                <small>{valueOf(row, "cacheHitRateLabel", "n/a")}</small>
+              </button>
+            );
+          })}
+        </div>
+        <aside className={styles.contextTurnDetail}>
+          <span>Turn {numberOf(activeTurn, "turnIndex") || rows.length}</span>
+          <strong>{formatCompactNumber(activeContext)} context · {formatCompactNumber(activeCost)} cost</strong>
+          <p>Cache hit {activeHitLabel} · {cacheHealthLabel(activeHit)} · main pressure {valueOf(activeTurn, "pressureSource", "unclassified")}</p>
+          <div className={styles.contextDetailStats}>
+            <div>
+              <span>Non-cached</span>
+              <strong>{formatCompactNumber(activeTurn.nonCachedInputTokens)}</strong>
+            </div>
+            <div>
+              <span>Cache write</span>
+              <strong>{formatCompactNumber(activeTurn.cacheWriteInvestmentTokens)}</strong>
+            </div>
+          </div>
+          <div className={styles.contextBucketBreakdown}>
+            {activeBuckets.map((bucket) => (
+              <div key={bucket.key}>
+                <span><i style={{ background: bucket.color }} />{bucket.label}</span>
+                <strong>{formatCompactNumber(bucket.tokens)}</strong>
+              </div>
+            ))}
+          </div>
+          {Object.keys(activeCompaction).length ? (
+            <p className={styles.contextEventNote}>Compaction: {valueOf(activeCompaction, "tokens", valueOf(activeCompaction, "detail", "recorded"))}</p>
+          ) : null}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
 function UsageTable({ rows, compact = false }: { rows: DashboardRow[]; compact?: boolean }): React.JSX.Element {
   return (
     <div className={cx(styles.analyticsTable, compact && styles.analyticsTableCompact)}>
@@ -6245,6 +6410,9 @@ function UsageLogsSurface({ focus = "all" }: { focus?: "all" | "usage" | "logs" 
       {(dashboard) => {
         const usage = dashboard.operations.usage;
         const summary = jsonObject(usage.summary);
+        const tokenEfficiency = jsonObject(usage.tokenEfficiency);
+        const efficiencySummary = jsonObject(tokenEfficiency.summary);
+        const trajectories = asRows(tokenEfficiency.episodeTrajectories);
         const tokenEvents = asRows(usage.tokenEvents);
         const trendRows = usageAnalyticsRows(usage, "trend", rangeDays);
         const eggRows = usageAnalyticsRows(usage, "elephant", rangeDays);
@@ -6270,6 +6438,12 @@ function UsageLogsSurface({ focus = "all" }: { focus?: "all" | "usage" | "logs" 
                   value: formatCompactNumber(summary.usageEvents ?? summary.runtimeStepUsageEvents),
                   note: "Token ledger rows, filled in from conversation usage when ledger rows are missing.",
                   tone: numberOf(summary, "usageEvents") || numberOf(summary, "runtimeStepUsageEvents") ? "healthy" : "attention",
+                },
+                {
+                  label: "Context / cost",
+                  value: `${formatCompactNumber(efficiencySummary.contextPressureTokens)} / ${formatCompactNumber(efficiencySummary.costPressureTokens)}`,
+                  note: "Context pressure counts all input; cost pressure counts non-cached input plus output.",
+                  tone: numberOf(efficiencySummary, "contextPressureTokens") ? "healthy" : "neutral",
                 },
                 {
                   label: "Herd",
@@ -6302,6 +6476,14 @@ function UsageLogsSurface({ focus = "all" }: { focus?: "all" | "usage" | "logs" 
                     </button>
                   ))}
                 </div>
+
+                <Panel
+                  eyebrow="Context"
+                  title="Episode token timeline"
+                  detail="Each block is one turn: height shows context pressure, color layers show token mix, and the dot shows prompt cache health."
+                >
+                  <ContextTimeline trajectories={trajectories} />
+                </Panel>
 
                 <Panel
                   eyebrow="Usage"
