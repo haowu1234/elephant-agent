@@ -21,7 +21,7 @@ from .api_runtime_console import (
     _tools,
 )
 from .api_runtime_console_usage import normalize_token_usage_row, token_efficiency_projection
-from .api_runtime_support import _jsonable, _now
+from .api_runtime_support import _jsonable, _now  # noqa: F401
 
 
 LOGGER = logging.getLogger(__name__)
@@ -114,6 +114,52 @@ def _usage_metadata(value: object) -> dict[str, Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _usage_metadata_total(metadata: Mapping[str, Any]) -> int:
+    prompt_tokens = _usage_int(metadata.get("prompt_tokens"))
+    completion_tokens = _usage_int(metadata.get("completion_tokens"))
+    return _usage_int(metadata.get("total_tokens")) or prompt_tokens + completion_tokens
+
+
+def _usage_totals_match(left: int, right: int) -> bool:
+    if left <= 0 or right <= 0:
+        return False
+    return abs(left - right) <= max(5, int(max(left, right) * 0.001))
+
+
+def _aggregate_usage_skip_step_ids(row_metadata: list[tuple[dict[str, Any], dict[str, Any]]]) -> set[str]:
+    grouped: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for row, metadata in row_metadata:
+        loop_id = str(row.get("loop_id") or "").strip()
+        if loop_id:
+            grouped.setdefault(loop_id, []).append((row, metadata))
+
+    skip_step_ids: set[str] = set()
+    for loop_rows in grouped.values():
+        call_rows = [
+            (row, metadata)
+            for row, metadata in loop_rows
+            if str(row.get("action") or "") == "call_model"
+        ]
+        emit_rows = [
+            (row, metadata)
+            for row, metadata in loop_rows
+            if str(row.get("action") or "") == "emit_response"
+        ]
+        if not call_rows or not emit_rows:
+            continue
+        call_total = sum(_usage_metadata_total(metadata) for _, metadata in call_rows)
+        emit_total = sum(_usage_metadata_total(metadata) for _, metadata in emit_rows)
+        if not _usage_totals_match(call_total, emit_total):
+            continue
+
+        if any(metadata.get("token_efficiency_schema") for _, metadata in emit_rows):
+            duplicate_rows = call_rows
+        else:
+            duplicate_rows = emit_rows
+        skip_step_ids.update(str(row.get("step_id") or "") for row, _ in duplicate_rows if row.get("step_id"))
+    return skip_step_ids
 
 
 def _usage_created_day(row: Mapping[str, Any]) -> str:
@@ -238,13 +284,16 @@ def _step_usage_events(
             execution_id = str(metadata.get("execution_id") or "").strip()
             if execution_id:
                 seen_ledger_execution_ids.add(execution_id)
+    skip_step_ids = _aggregate_usage_skip_step_ids(row_metadata)
     for row, metadata in row_metadata:
         prompt_tokens = _usage_int(metadata.get("prompt_tokens"))
         completion_tokens = _usage_int(metadata.get("completion_tokens"))
-        total_tokens = _usage_int(metadata.get("total_tokens")) or prompt_tokens + completion_tokens
+        total_tokens = _usage_metadata_total(metadata)
         if total_tokens <= 0:
             continue
         step_id = str(row.get("step_id") or "")
+        if step_id and step_id in skip_step_ids:
+            continue
         execution_id = str(metadata.get("execution_id") or "").strip()
         if execution_id and execution_id in seen_ledger_execution_ids and not metadata.get("token_efficiency_schema"):
             continue
@@ -254,7 +303,9 @@ def _step_usage_events(
             normalize_token_usage_row(
                 {
                     "usage_id": f"step:{step_id}",
-                    "session_id": row.get("state_id"),
+                    "session_id": row.get("episode_id"),
+                    "episode_id": row.get("episode_id"),
+                    "state_id": row.get("state_id"),
                     "profile_id": row.get("personal_model_id"),
                     "run_id": row.get("loop_id"),
                     "source_event_id": step_id,
@@ -713,8 +764,8 @@ def _runtime_traces(
     return tuple(traces)
 
 
-from .api_runtime_internal_sections import inspect_internal_dashboard
-from .api_runtime_internal_triggers import delete_diary_entry, trigger_diary_write, trigger_reflect_job
+from .api_runtime_internal_sections import inspect_internal_dashboard  # noqa: E402
+from .api_runtime_internal_triggers import delete_diary_entry, trigger_diary_write, trigger_reflect_job  # noqa: E402
 
 
 __all__ = ["delete_diary_entry", "inspect_internal_dashboard", "trigger_diary_write", "trigger_reflect_job"]

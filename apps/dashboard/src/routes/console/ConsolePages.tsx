@@ -6206,7 +6206,7 @@ function ContextTimeline({ trajectories }: { trajectories: DashboardRow[] }): Re
   const activeCompaction = jsonObject(activeTurn.compactionEvent);
 
   if (!trajectories.length || !rows.length) {
-    return <EmptyPanel title="No context timeline yet" detail="The context timeline appears after turns start recording token efficiency ledger rows." />;
+    return <EmptyPanel title="No context timeline yet" detail="The context timeline appears after provider-backed turns report token usage." />;
   }
 
   return (
