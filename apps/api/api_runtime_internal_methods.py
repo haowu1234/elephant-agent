@@ -162,6 +162,101 @@ def _aggregate_usage_skip_step_ids(row_metadata: list[tuple[dict[str, Any], dict
     return skip_step_ids
 
 
+def _loop_model_call_summaries(row_metadata: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, dict[str, int]]:
+    grouped: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for row, metadata in row_metadata:
+        if str(row.get("action") or "") != "call_model":
+            continue
+        if str(row.get("status") or "") == "planned":
+            continue
+        prompt_tokens = _usage_int(metadata.get("prompt_tokens"))
+        total_tokens = _usage_metadata_total(metadata)
+        if prompt_tokens <= 0 and total_tokens <= 0:
+            continue
+        loop_id = str(row.get("loop_id") or "").strip()
+        if loop_id:
+            grouped.setdefault(loop_id, []).append((row, metadata))
+
+    summaries: dict[str, dict[str, int]] = {}
+    for loop_id, items in grouped.items():
+        sorted_items = sorted(
+            items,
+            key=lambda item: (str(item[0].get("created_at") or ""), str(item[0].get("step_id") or "")),
+        )
+        prompt_values = [_usage_int(metadata.get("prompt_tokens")) for _, metadata in sorted_items]
+        if not prompt_values:
+            continue
+        summaries[loop_id] = {
+            "input_throughput_tokens": sum(prompt_values),
+            "peak_context_tokens": max(prompt_values),
+            "last_context_tokens": prompt_values[-1],
+            "model_call_count": len(prompt_values),
+        }
+    return summaries
+
+
+def _metadata_with_peak_context(
+    row: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    loop_call_summaries: Mapping[str, Mapping[str, int]],
+) -> dict[str, Any]:
+    loop_id = str(row.get("loop_id") or "").strip()
+    summary = loop_call_summaries.get(loop_id)
+    if not metadata.get("token_efficiency_schema") or not summary:
+        return dict(metadata)
+    try:
+        ledger_payload = json.loads(str(metadata.get("token_efficiency_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        ledger_payload = {}
+    if not isinstance(ledger_payload, Mapping):
+        return dict(metadata)
+
+    peak_context_tokens = _usage_int(summary.get("peak_context_tokens"))
+    input_throughput_tokens = _usage_int(summary.get("input_throughput_tokens"))
+    last_context_tokens = _usage_int(summary.get("last_context_tokens"))
+    model_call_count = _usage_int(summary.get("model_call_count"))
+    if peak_context_tokens <= 0:
+        return dict(metadata)
+    ledger_input_tokens = _usage_int(
+        ledger_payload.get("inputThroughputTokens")
+        or ledger_payload.get("promptTokens")
+        or metadata.get("prompt_tokens")
+    )
+    if ledger_input_tokens > 0 and not _usage_totals_match(input_throughput_tokens, ledger_input_tokens):
+        return dict(metadata)
+
+    ledger = dict(ledger_payload)
+    ledger["inputThroughputTokens"] = ledger_input_tokens or input_throughput_tokens
+    ledger["peakContextTokens"] = peak_context_tokens
+    ledger["lastContextTokens"] = last_context_tokens or peak_context_tokens
+    ledger["modelCallCount"] = model_call_count
+    ledger["contextPressureTokens"] = peak_context_tokens
+    ledger["contextPressureKind"] = "peak_model_call_input"
+    ledger["contextPressureQuality"] = (
+        "measured_model_calls"
+        if str(ledger.get("schemaVersion") or "") == "2"
+        else "reconstructed_model_calls"
+    )
+    ledger.setdefault("costPressureQuality", "provider_usage_derived")
+    ledger.setdefault("bucketQuality", "estimated_projection")
+    context_window_tokens = _usage_int(ledger.get("contextWindowTokens"))
+    if context_window_tokens > 0:
+        ledger["contextPressureRatio"] = round(peak_context_tokens / context_window_tokens, 4)
+
+    updated = dict(metadata)
+    updated["token_efficiency_json"] = json.dumps(ledger, separators=(",", ":"), sort_keys=True)
+    updated["context_pressure_tokens"] = str(peak_context_tokens)
+    updated["input_throughput_tokens"] = str(ledger["inputThroughputTokens"])
+    updated["peak_context_tokens"] = str(peak_context_tokens)
+    updated["last_context_tokens"] = str(ledger["lastContextTokens"])
+    updated["model_call_count"] = str(model_call_count)
+    updated["context_pressure_kind"] = "peak_model_call_input"
+    updated["context_pressure_quality"] = str(ledger["contextPressureQuality"])
+    updated["cost_pressure_quality"] = str(ledger["costPressureQuality"])
+    updated["bucket_quality"] = str(ledger["bucketQuality"])
+    return updated
+
+
 def _usage_created_day(row: Mapping[str, Any]) -> str:
     created_at = str(row.get("created_at") or row.get("createdAt") or "").strip()
     return created_at[:10] if len(created_at) >= 10 else "unknown"
@@ -285,7 +380,9 @@ def _step_usage_events(
             if execution_id:
                 seen_ledger_execution_ids.add(execution_id)
     skip_step_ids = _aggregate_usage_skip_step_ids(row_metadata)
+    loop_call_summaries = _loop_model_call_summaries(row_metadata)
     for row, metadata in row_metadata:
+        metadata = _metadata_with_peak_context(row, metadata, loop_call_summaries)
         prompt_tokens = _usage_int(metadata.get("prompt_tokens"))
         completion_tokens = _usage_int(metadata.get("completion_tokens"))
         total_tokens = _usage_metadata_total(metadata)

@@ -450,6 +450,7 @@ class KernelService:
             model_id=_execution_side_effect_value(execution, "model"),
             transport_id=_execution_side_effect_value(execution, "transport"),
             context_window_tokens=int(getattr(context, "token_budget", 0) or 0),
+            model_call_steps=step_recorder.steps,
         )
         step_recorder.record(
             phase="acting",

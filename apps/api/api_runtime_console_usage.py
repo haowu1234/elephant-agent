@@ -111,13 +111,41 @@ def normalize_token_usage_row(row: Mapping[str, Any]) -> dict[str, Any]:
         record["cache_write_investment_tokens"] = _int_value(
             ledger.get("cacheWriteInvestmentTokens") or metadata.get("cache_write_investment_tokens")
         )
+        record["input_throughput_tokens"] = _int_value(
+            ledger.get("inputThroughputTokens") or metadata.get("input_throughput_tokens") or prompt_tokens
+        )
+        record["peak_context_tokens"] = _int_value(
+            ledger.get("peakContextTokens") or metadata.get("peak_context_tokens") or record["context_pressure_tokens"]
+        )
+        record["last_context_tokens"] = _int_value(
+            ledger.get("lastContextTokens") or metadata.get("last_context_tokens") or record["context_pressure_tokens"]
+        )
+        record["model_call_count"] = _int_value(
+            ledger.get("modelCallCount") or metadata.get("model_call_count")
+        )
         record["contextPressureTokens"] = record["context_pressure_tokens"]
         record["costPressureTokens"] = record["cost_pressure_tokens"]
         record["nonCachedInputTokens"] = record["non_cached_input_tokens"]
         record["cacheWriteInvestmentTokens"] = record["cache_write_investment_tokens"]
+        record["inputThroughputTokens"] = record["input_throughput_tokens"]
+        record["peakContextTokens"] = record["peak_context_tokens"]
+        record["lastContextTokens"] = record["last_context_tokens"]
+        record["modelCallCount"] = record["model_call_count"]
         if ledger.get("contextPressureRatio") is not None:
             record["context_pressure_ratio"] = ledger.get("contextPressureRatio")
             record["contextPressureRatio"] = ledger.get("contextPressureRatio")
+        if ledger.get("contextPressureKind"):
+            record["context_pressure_kind"] = ledger.get("contextPressureKind")
+            record["contextPressureKind"] = ledger.get("contextPressureKind")
+        if ledger.get("contextPressureQuality"):
+            record["context_pressure_quality"] = ledger.get("contextPressureQuality")
+            record["contextPressureQuality"] = ledger.get("contextPressureQuality")
+        if ledger.get("costPressureQuality"):
+            record["cost_pressure_quality"] = ledger.get("costPressureQuality")
+            record["costPressureQuality"] = ledger.get("costPressureQuality")
+        if ledger.get("bucketQuality"):
+            record["bucket_quality"] = ledger.get("bucketQuality")
+            record["bucketQuality"] = ledger.get("bucketQuality")
         if ledger.get("pressureSource"):
             record["pressure_source"] = ledger.get("pressureSource")
             record["pressureSource"] = ledger.get("pressureSource")
@@ -181,6 +209,10 @@ def _projected_efficiency_row(event: Mapping[str, Any]) -> dict[str, Any] | None
             cache_usage_reported=cache_usage_reported,
         )
         buckets = ledger.get("buckets") if isinstance(ledger.get("buckets"), Mapping) else {}
+        input_throughput_tokens = _int_value(ledger.get("inputThroughputTokens") or prompt_tokens)
+        context_pressure_tokens = _int_value(
+            ledger.get("contextPressureTokens") or ledger.get("peakContextTokens") or prompt_tokens
+        )
         return {
             "episodeId": str(ledger.get("episodeId") or event.get("session_id") or event.get("run_id") or "unknown"),
             "sourceTurnIndex": _int_value(ledger.get("turnIndex")) or None,
@@ -188,15 +220,23 @@ def _projected_efficiency_row(event: Mapping[str, Any]) -> dict[str, Any] | None
             "sourceEventId": event.get("source_event_id") or event.get("usage_id") or "",
             "modelId": ledger.get("modelId") or event.get("model_id") or "",
             "promptTokens": prompt_tokens,
+            "inputThroughputTokens": input_throughput_tokens,
+            "peakContextTokens": _int_value(ledger.get("peakContextTokens") or context_pressure_tokens),
+            "lastContextTokens": _int_value(ledger.get("lastContextTokens") or context_pressure_tokens),
+            "modelCallCount": _int_value(ledger.get("modelCallCount")),
             "cachedInputTokens": cached_tokens,
-            "contextPressureTokens": _int_value(ledger.get("contextPressureTokens")),
+            "contextPressureTokens": context_pressure_tokens,
             "contextPressureRatio": _float_value(ledger.get("contextPressureRatio")),
+            "contextPressureKind": ledger.get("contextPressureKind") or "",
+            "contextPressureQuality": ledger.get("contextPressureQuality") or "",
             "costPressureTokens": _int_value(ledger.get("costPressureTokens")),
+            "costPressureQuality": ledger.get("costPressureQuality") or "",
             "nonCachedInputTokens": _int_value(ledger.get("nonCachedInputTokens")),
             "cacheWriteInvestmentTokens": _int_value(ledger.get("cacheWriteInvestmentTokens")),
             "cacheHitRate": cache_hit_rate,
             "cacheHitRateLabel": _projected_cache_hit_label(cache_hit_rate),
             "pressureSource": ledger.get("pressureSource") or "ledger",
+            "bucketQuality": ledger.get("bucketQuality") or "",
             "buckets": dict(buckets),
             "compactionEvent": (
                 dict(ledger.get("compactionEvent")) if isinstance(ledger.get("compactionEvent"), Mapping) else {}
@@ -225,15 +265,23 @@ def _projected_efficiency_row(event: Mapping[str, Any]) -> dict[str, Any] | None
         "sourceEventId": event.get("source_event_id") or event.get("usage_id") or "",
         "modelId": event.get("model_id") or event.get("modelId") or "",
         "promptTokens": prompt_tokens,
+        "inputThroughputTokens": prompt_tokens,
+        "peakContextTokens": prompt_tokens,
+        "lastContextTokens": prompt_tokens,
+        "modelCallCount": 1 if prompt_tokens else 0,
         "cachedInputTokens": cached_tokens,
         "contextPressureTokens": prompt_tokens,
         "contextPressureRatio": None,
+        "contextPressureKind": "single_model_call_input",
+        "contextPressureQuality": "legacy_usage_row",
         "costPressureTokens": non_cached_tokens + completion_tokens,
+        "costPressureQuality": "legacy_usage_derived",
         "nonCachedInputTokens": non_cached_tokens,
         "cacheWriteInvestmentTokens": cache_write_tokens,
         "cacheHitRate": cache_hit_rate,
         "cacheHitRateLabel": _projected_cache_hit_label(cache_hit_rate),
         "pressureSource": "legacy_usage",
+        "bucketQuality": "legacy_unbucketed",
         "buckets": {"unbucketedInputTokens": prompt_tokens} if prompt_tokens else {},
         "compactionEvent": {},
     }
@@ -243,6 +291,7 @@ def token_efficiency_projection(events: list[dict[str, Any]]) -> dict[str, Any]:
     projected_by_episode: dict[str, list[dict[str, Any]]] = {}
     pressure_sources: dict[str, int] = {}
     total_prompt = 0
+    total_input_throughput = 0
     total_cached = 0
     total_context_pressure = 0
     total_cost_pressure = 0
@@ -255,10 +304,12 @@ def token_efficiency_projection(events: list[dict[str, Any]]) -> dict[str, Any]:
         episode_id = str(projected.get("episodeId") or "unknown")
         projected_by_episode.setdefault(episode_id, []).append(projected)
         prompt_tokens = _int_value(projected.get("promptTokens"))
+        input_throughput_tokens = _int_value(projected.get("inputThroughputTokens")) or prompt_tokens
         cached_tokens = _int_value(projected.get("cachedInputTokens"))
         context_tokens = _int_value(projected.get("contextPressureTokens"))
         cost_tokens = _int_value(projected.get("costPressureTokens"))
         total_prompt += prompt_tokens
+        total_input_throughput += input_throughput_tokens
         total_cached += cached_tokens
         total_context_pressure += context_tokens
         total_cost_pressure += cost_tokens
@@ -276,6 +327,7 @@ def token_efficiency_projection(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "costPressureTokens": 0,
                 "nonCachedInputTokens": 0,
                 "cacheWriteInvestmentTokens": 0,
+                "inputThroughputTokens": 0,
                 "cacheHitRateLabel": "n/a",
             },
             "episodeTrajectories": (),
@@ -343,8 +395,13 @@ def token_efficiency_projection(events: list[dict[str, Any]]) -> dict[str, Any]:
             "costPressureTokens": total_cost_pressure,
             "nonCachedInputTokens": total_non_cached,
             "cacheWriteInvestmentTokens": total_cache_write,
-            "cacheHitRateLabel": _cache_hit_rate_label(total_cached, total_prompt) if total_prompt else "n/a",
-            "cacheHitRate": round(total_cached / total_prompt, 4) if total_prompt else None,
+            "inputThroughputTokens": total_input_throughput,
+            "cacheHitRateLabel": (
+                _cache_hit_rate_label(total_cached, total_input_throughput)
+                if total_input_throughput
+                else "n/a"
+            ),
+            "cacheHitRate": round(total_cached / total_input_throughput, 4) if total_input_throughput else None,
         },
         "episodeTrajectories": tuple(
             sorted(trajectories, key=lambda item: str(item.get("lastTurnAt") or ""), reverse=True)[:50]

@@ -6201,6 +6201,7 @@ function ContextTimeline({ trajectories }: { trajectories: DashboardRow[] }): Re
   const activeBuckets = tokenBucketSegments(activeTurn);
   const activeContext = numberOf(activeTurn, "contextPressureTokens");
   const activeCost = numberOf(activeTurn, "costPressureTokens");
+  const activeThroughput = numberOf(activeTurn, "inputThroughputTokens");
   const activeHit = typeof activeTurn.cacheHitRate === "number" ? activeTurn.cacheHitRate : null;
   const activeHitLabel = valueOf(activeTurn, "cacheHitRateLabel", activeHit === null ? "n/a" : `${(activeHit * 100).toFixed(1)}%`);
   const activeCompaction = jsonObject(activeTurn.compactionEvent);
@@ -6265,9 +6266,13 @@ function ContextTimeline({ trajectories }: { trajectories: DashboardRow[] }): Re
         </div>
         <aside className={styles.contextTurnDetail}>
           <span>Turn {numberOf(activeTurn, "turnIndex") || rows.length}</span>
-          <strong>{formatCompactNumber(activeContext)} context · {formatCompactNumber(activeCost)} cost</strong>
+          <strong>{formatCompactNumber(activeContext)} peak context · {formatCompactNumber(activeCost)} cost</strong>
           <p>Cache hit {activeHitLabel} · {cacheHealthLabel(activeHit)} · main pressure {valueOf(activeTurn, "pressureSource", "unclassified")}</p>
           <div className={styles.contextDetailStats}>
+            <div>
+              <span>Throughput</span>
+              <strong>{formatCompactNumber(activeThroughput || activeContext)}</strong>
+            </div>
             <div>
               <span>Non-cached</span>
               <strong>{formatCompactNumber(activeTurn.nonCachedInputTokens)}</strong>
@@ -6440,9 +6445,9 @@ function UsageLogsSurface({ focus = "all" }: { focus?: "all" | "usage" | "logs" 
                   tone: numberOf(summary, "usageEvents") || numberOf(summary, "runtimeStepUsageEvents") ? "healthy" : "attention",
                 },
                 {
-                  label: "Context / cost",
+                  label: "Peak context / cost",
                   value: `${formatCompactNumber(efficiencySummary.contextPressureTokens)} / ${formatCompactNumber(efficiencySummary.costPressureTokens)}`,
-                  note: "Context pressure counts all input; cost pressure counts non-cached input plus output.",
+                  note: "Context pressure uses peak model-call input; cost pressure counts non-cached input plus output.",
                   tone: numberOf(efficiencySummary, "contextPressureTokens") ? "healthy" : "neutral",
                 },
                 {

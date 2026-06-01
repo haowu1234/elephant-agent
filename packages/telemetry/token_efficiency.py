@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 
-TOKEN_EFFICIENCY_SCHEMA_VERSION = "1"
+TOKEN_EFFICIENCY_SCHEMA_VERSION = "2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,17 +61,26 @@ class TokenEfficiencyLedgerRecord:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    input_throughput_tokens: int = 0
+    peak_context_tokens: int = 0
+    last_context_tokens: int = 0
+    model_call_count: int = 0
     cached_input_tokens: int = 0
     non_cached_input_tokens: int = 0
     cache_write_investment_tokens: int = 0
+    cache_write_reported: bool = False
     cache_usage_reported: bool = False
     cache_hit_rate: float | None = None
     context_pressure_tokens: int = 0
     context_pressure_ratio: float | None = None
+    context_pressure_kind: str = ""
+    context_pressure_quality: str = ""
     cost_pressure_tokens: int = 0
+    cost_pressure_quality: str = ""
     pressure_source: str = ""
     cache_break_reason: str = ""
     compaction_event: Mapping[str, object] = field(default_factory=dict)
+    bucket_quality: str = ""
     buckets: TokenEfficiencyBuckets = field(default_factory=TokenEfficiencyBuckets)
 
 
@@ -91,6 +100,7 @@ def build_token_efficiency_record(
     model_id: str = "",
     transport_id: str = "",
     context_window_tokens: int = 0,
+    model_call_steps: Sequence[object] = (),
 ) -> TokenEfficiencyLedgerRecord:
     prompt_tokens = _int_value(getattr(execution, "prompt_tokens", 0))
     completion_tokens = _int_value(getattr(execution, "completion_tokens", 0))
@@ -98,20 +108,30 @@ def build_token_efficiency_record(
     cached_input_tokens = _int_value(getattr(execution, "cached_prompt_tokens", 0))
     cache_write_tokens = _int_value(getattr(execution, "cache_creation_prompt_tokens", 0))
     cache_usage_reported = bool(getattr(execution, "cache_usage_reported", False))
-    non_cached_input_tokens = max(prompt_tokens - cached_input_tokens, 0)
+    model_call_usage = _model_call_usage(model_call_steps)
+    input_throughput_tokens = _int_value(model_call_usage.get("input_throughput_tokens")) or prompt_tokens
+    peak_context_tokens = _int_value(model_call_usage.get("peak_context_tokens")) or prompt_tokens
+    last_context_tokens = _int_value(model_call_usage.get("last_context_tokens")) or peak_context_tokens
+    model_call_count = _int_value(model_call_usage.get("model_call_count")) or (1 if prompt_tokens > 0 else 0)
+    context_pressure_quality = (
+        "measured_model_calls"
+        if model_call_usage.get("model_call_count")
+        else "aggregate_fallback"
+    )
+    non_cached_input_tokens = max(input_throughput_tokens - cached_input_tokens, 0)
     cache_hit_rate = (
-        round(cached_input_tokens / prompt_tokens, 4)
-        if cache_usage_reported and prompt_tokens > 0
+        round(cached_input_tokens / input_throughput_tokens, 4)
+        if cache_usage_reported and input_throughput_tokens > 0
         else None
     )
     context_pressure_ratio = (
-        round(prompt_tokens / context_window_tokens, 4)
-        if context_window_tokens > 0 and prompt_tokens > 0
+        round(peak_context_tokens / context_window_tokens, 4)
+        if context_window_tokens > 0 and peak_context_tokens > 0
         else None
     )
     buckets = _estimate_buckets(
         context=context,
-        prompt_tokens=prompt_tokens,
+        prompt_tokens=peak_context_tokens,
         user_prompt=user_prompt,
         turn_messages=turn_messages,
     )
@@ -131,16 +151,25 @@ def build_token_efficiency_record(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        input_throughput_tokens=input_throughput_tokens,
+        peak_context_tokens=peak_context_tokens,
+        last_context_tokens=last_context_tokens,
+        model_call_count=model_call_count,
         cached_input_tokens=cached_input_tokens,
         non_cached_input_tokens=non_cached_input_tokens,
         cache_write_investment_tokens=cache_write_tokens,
+        cache_write_reported=cache_usage_reported,
         cache_usage_reported=cache_usage_reported,
         cache_hit_rate=cache_hit_rate,
-        context_pressure_tokens=prompt_tokens,
+        context_pressure_tokens=peak_context_tokens,
         context_pressure_ratio=context_pressure_ratio,
+        context_pressure_kind="peak_model_call_input",
+        context_pressure_quality=context_pressure_quality,
         cost_pressure_tokens=non_cached_input_tokens + completion_tokens,
+        cost_pressure_quality="provider_usage_derived",
         pressure_source=_pressure_source(buckets),
         compaction_event=_latest_compaction_event(stages),
+        bucket_quality="estimated_projection",
         buckets=buckets,
     )
 
@@ -153,6 +182,14 @@ def token_efficiency_metadata(record: TokenEfficiencyLedgerRecord) -> dict[str, 
         "cost_pressure_tokens": str(record.cost_pressure_tokens),
         "non_cached_input_tokens": str(record.non_cached_input_tokens),
         "cache_write_investment_tokens": str(record.cache_write_investment_tokens),
+        "input_throughput_tokens": str(record.input_throughput_tokens),
+        "peak_context_tokens": str(record.peak_context_tokens),
+        "last_context_tokens": str(record.last_context_tokens),
+        "model_call_count": str(record.model_call_count),
+        "context_pressure_kind": record.context_pressure_kind,
+        "context_pressure_quality": record.context_pressure_quality,
+        "cost_pressure_quality": record.cost_pressure_quality,
+        "bucket_quality": record.bucket_quality,
         "token_efficiency_pressure_source": record.pressure_source,
         "token_efficiency_json": json.dumps(payload, separators=(",", ":"), sort_keys=True),
     }
@@ -225,6 +262,44 @@ def _estimate_buckets(
         current_user_input_tokens=current_user_input_tokens,
         unbucketed_input_tokens=unbucketed,
     )
+
+
+def _model_call_usage(model_call_steps: Sequence[object]) -> dict[str, int]:
+    calls: list[dict[str, int]] = []
+    for step in tuple(model_call_steps or ()):
+        if str(getattr(step, "action", "") or "") != "call_model":
+            continue
+        if str(getattr(step, "status", "") or "") == "planned":
+            continue
+        metadata = getattr(step, "metadata", {}) or {}
+        if not isinstance(metadata, Mapping):
+            continue
+        prompt_tokens = _int_value(metadata.get("prompt_tokens"))
+        completion_tokens = _int_value(metadata.get("completion_tokens"))
+        total_tokens = _int_value(metadata.get("total_tokens")) or prompt_tokens + completion_tokens
+        if prompt_tokens <= 0 and total_tokens <= 0:
+            continue
+        calls.append(
+            {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "cached_input_tokens": _int_value(metadata.get("cached_prompt_tokens")),
+                "cache_write_tokens": _int_value(metadata.get("cache_creation_prompt_tokens")),
+            }
+        )
+    if not calls:
+        return {}
+    return {
+        "input_throughput_tokens": sum(item["prompt_tokens"] for item in calls),
+        "completion_throughput_tokens": sum(item["completion_tokens"] for item in calls),
+        "total_throughput_tokens": sum(item["total_tokens"] for item in calls),
+        "cached_input_tokens": sum(item["cached_input_tokens"] for item in calls),
+        "cache_write_tokens": sum(item["cache_write_tokens"] for item in calls),
+        "peak_context_tokens": max(item["prompt_tokens"] for item in calls),
+        "last_context_tokens": calls[-1]["prompt_tokens"],
+        "model_call_count": len(calls),
+    }
 
 
 def _estimate_message_tokens(message: object) -> int:

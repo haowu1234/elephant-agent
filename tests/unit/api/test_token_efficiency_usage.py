@@ -66,14 +66,22 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
             "createdAt": "2026-05-30T00:00:00+00:00",
             "promptTokens": 100,
             "completionTokens": 20,
+            "inputThroughputTokens": 100,
+            "peakContextTokens": 100,
+            "lastContextTokens": 100,
+            "modelCallCount": 1,
             "contextPressureTokens": 100,
+            "contextPressureKind": "peak_model_call_input",
+            "contextPressureQuality": "measured_model_calls",
             "costPressureTokens": 50,
+            "costPressureQuality": "provider_usage_derived",
             "cachedInputTokens": 70,
             "nonCachedInputTokens": 30,
             "cacheWriteInvestmentTokens": 4,
             "cacheUsageReported": True,
             "cacheHitRate": 0.7,
             "pressureSource": "tool_result",
+            "bucketQuality": "estimated_projection",
             "buckets": {"toolResultTokens": 60, "stablePrefixTokens": 20},
             "compactionEvent": {"reason": "usage", "tokens": "100->40"},
         }
@@ -90,6 +98,9 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
         )
 
         self.assertEqual(row["contextPressureTokens"], 100)
+        self.assertEqual(row["inputThroughputTokens"], 100)
+        self.assertEqual(row["peakContextTokens"], 100)
+        self.assertEqual(row["modelCallCount"], 1)
         self.assertEqual(row["costPressureTokens"], 50)
         self.assertEqual(row["nonCachedInputTokens"], 30)
         self.assertEqual(row["cacheWriteInvestmentTokens"], 4)
@@ -116,14 +127,22 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
                                 "createdAt": "2026-05-30T00:00:00+00:00",
                                 "promptTokens": 100,
                                 "completionTokens": 20,
+                                "inputThroughputTokens": 100,
+                                "peakContextTokens": 100,
+                                "lastContextTokens": 100,
+                                "modelCallCount": 1,
                                 "contextPressureTokens": 100,
+                                "contextPressureKind": "peak_model_call_input",
+                                "contextPressureQuality": "measured_model_calls",
                                 "costPressureTokens": 50,
+                                "costPressureQuality": "provider_usage_derived",
                                 "cachedInputTokens": 70,
                                 "nonCachedInputTokens": 30,
                                 "cacheWriteInvestmentTokens": 4,
                                 "cacheUsageReported": True,
                                 "cacheHitRate": 0.7,
                                 "pressureSource": "tool_result",
+                                "bucketQuality": "estimated_projection",
                                 "buckets": {"toolResultTokens": 60},
                                 "compactionEvent": {"reason": "usage", "tokens": "100->40"},
                             },
@@ -137,6 +156,7 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
 
         self.assertEqual(projection["summary"]["turns"], 1)
         self.assertEqual(projection["summary"]["contextPressureTokens"], 100)
+        self.assertEqual(projection["summary"]["inputThroughputTokens"], 100)
         self.assertEqual(projection["summary"]["costPressureTokens"], 50)
         self.assertEqual(projection["summary"]["cacheHitRateLabel"], "70.0%")
         self.assertEqual(projection["summary"]["episodes"], 1)
@@ -181,6 +201,7 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
         rows = projection["episodeTrajectories"][0]["rows"]
         self.assertEqual(projection["summary"]["turns"], 2)
         self.assertEqual(projection["summary"]["contextPressureTokens"], 300)
+        self.assertEqual(projection["summary"]["inputThroughputTokens"], 300)
         self.assertEqual(projection["summary"]["costPressureTokens"], 250)
         self.assertEqual(projection["summary"]["cacheHitRateLabel"], "26.7%")
         self.assertEqual(projection["pressureSources"][0]["source"], "legacy_usage")
@@ -240,6 +261,10 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
                                 "createdAt": "2026-05-30T00:00:00+00:00",
                                 "promptTokens": 100,
                                 "completionTokens": 20,
+                                "inputThroughputTokens": 100,
+                                "peakContextTokens": 100,
+                                "lastContextTokens": 100,
+                                "modelCallCount": 1,
                                 "contextPressureTokens": 100,
                                 "costPressureTokens": 50,
                                 "cachedInputTokens": 70,
@@ -261,6 +286,8 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
         self.assertEqual(usage["summary"]["promptTokens"], 100)
         self.assertEqual(usage["tokenEvents"][0]["source_event_id"], "step:emit-response")
         self.assertEqual(usage["tokenEfficiency"]["summary"]["turns"], 1)
+        self.assertEqual(usage["tokenEfficiency"]["summary"]["contextPressureTokens"], 100)
+        self.assertEqual(usage["tokenEfficiency"]["summary"]["inputThroughputTokens"], 100)
         self.assertEqual(usage["tokenEfficiency"]["summary"]["costPressureTokens"], 50)
 
     def test_canonical_usage_drops_legacy_loop_aggregate_emit_response(self) -> None:
@@ -437,10 +464,17 @@ class TokenEfficiencyUsageProjectionTest(unittest.TestCase):
         self.assertEqual(usage["summary"]["completionTokens"], 30)
         self.assertEqual(usage["summary"]["totalTokens"], 120)
         self.assertEqual(usage["tokenEvents"][0]["source_event_id"], "step:emit-response")
+        self.assertEqual(usage["tokenEfficiency"]["summary"]["contextPressureTokens"], 60)
+        self.assertEqual(usage["tokenEfficiency"]["summary"]["inputThroughputTokens"], 90)
         self.assertEqual(usage["tokenEfficiency"]["summary"]["costPressureTokens"], 50)
         row = usage["tokenEfficiency"]["episodeTrajectories"][0]["rows"][0]
         self.assertEqual(row["turnIndex"], 1)
         self.assertEqual(row["sourceTurnIndex"], 7)
+        self.assertEqual(row["contextPressureTokens"], 60)
+        self.assertEqual(row["inputThroughputTokens"], 90)
+        self.assertEqual(row["peakContextTokens"], 60)
+        self.assertEqual(row["modelCallCount"], 2)
+        self.assertEqual(row["contextPressureQuality"], "reconstructed_model_calls")
         self.assertEqual(row["buckets"], {"toolResultTokens": 30, "unbucketedInputTokens": 60})
 
 
